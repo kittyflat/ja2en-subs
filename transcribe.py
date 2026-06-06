@@ -1,17 +1,21 @@
 """
-Batch-transcribe Japanese audio to SRT subtitles using faster-whisper.
+Batch-transcribe Japanese audio/video to SRT subtitles using faster-whisper.
 
 Usage:
   python transcribe.py <dir_or_file> [model] [--force]
 
 Arguments:
-  <dir_or_file>   Path to a .wav file or a directory (searched recursively)
+  <dir_or_file>   Path to a media file or a directory (searched recursively).
+                  Accepts .wav directly, or video files (.mp4, .mkv, .wmv,
+                  .mov, .avi, .m4v) which are auto-converted to .wav first.
   [model]         Whisper model size (default: medium)
                   e.g. tiny, base, small, medium, large-v3
   --force         Re-generate .srt files even if they already exist
 
 Notes:
-  - WAV input should be mono, 16 kHz PCM for best results
+  - Video files are converted to mono 16 kHz PCM WAV via ffmpeg. The
+    resulting .wav is written next to the source and reused on later
+    runs (conversion is skipped if the .wav already exists).
   - Model is loaded once and reused across files
   - Skips files that already have a .srt, unless --force is given
   - Progress is printed per segment with elapsed time and ETA
@@ -20,6 +24,7 @@ Notes:
 from faster_whisper import WhisperModel
 import sys
 import pathlib
+import subprocess
 import time
 import wave
 from typing import Iterable
@@ -52,13 +57,30 @@ def hms(seconds: float) -> str:
     m, s = divmod(rem, 60)
     return f"{h:02d}:{m:02d}:{s:02d}"
 
-def iter_wavs(input_path: pathlib.Path) -> Iterable[pathlib.Path]:
+VIDEO_EXTENSIONS = {".mp4", ".mkv", ".wmv", ".mov", ".avi", ".m4v"}
+MEDIA_EXTENSIONS = {".wav"} | VIDEO_EXTENSIONS
+
+def iter_media(input_path: pathlib.Path) -> Iterable[pathlib.Path]:
     if input_path.is_file():
-        if input_path.suffix.lower() == ".wav":
+        if input_path.suffix.lower() in MEDIA_EXTENSIONS:
             yield input_path
         return
     # directory: recursive search
-    yield from sorted(input_path.rglob("*.wav"))
+    yield from sorted(
+        p for p in input_path.rglob("*") if p.suffix.lower() in MEDIA_EXTENSIONS
+    )
+
+def convert_to_wav(source: pathlib.Path, dest: pathlib.Path) -> None:
+    """Extract mono 16 kHz PCM WAV audio from a video (or other media) file via ffmpeg."""
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-i", str(source),
+            "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
+            str(dest),
+        ],
+        check=True,
+        capture_output=True,
+    )
 
 # ----------------------------
 # Args
@@ -96,30 +118,45 @@ model = WhisperModel(
 # Batch processing
 # ----------------------------
 
-wavs = list(iter_wavs(input_path))
-if not wavs:
-    print("No .wav files found.")
+media_files = list(iter_media(input_path))
+if not media_files:
+    print("No audio/video files found.")
     sys.exit(1)
 
-print(f"Found {len(wavs)} .wav file(s)\n")
+# Resolve each media file to its target .wav, deduping so a video and an
+# already-existing .wav for the same content aren't both processed.
+seen_wavs = set()
+targets = []
+for m in media_files:
+    wav_path = m if m.suffix.lower() == ".wav" else m.with_suffix(".wav")
+    if wav_path in seen_wavs:
+        continue
+    seen_wavs.add(wav_path)
+    targets.append((m, wav_path))
+
+print(f"Found {len(targets)} file(s)\n")
 
 batch_start = time.time()
 ok = 0
 skipped = 0
 failed = 0
 
-for i, wav_path in enumerate(wavs, 1):
+for i, (source_path, wav_path) in enumerate(targets, 1):
     output_path = wav_path.with_suffix(".srt")
 
     if output_path.exists() and not force:
-        print(f"[{i}/{len(wavs)}] SKIP (exists): {wav_path.name}")
+        print(f"[{i}/{len(targets)}] SKIP (exists): {wav_path.name}")
         skipped += 1
         continue
 
     try:
+        if not wav_path.exists():
+            print(f"[{i}/{len(targets)}] Converting to WAV: {source_path.name} -> {wav_path.name}")
+            convert_to_wav(source_path, wav_path)
+
         total_duration = get_wav_duration(wav_path)
 
-        print(f"\n[{i}/{len(wavs)}] Transcribing: {wav_path.name}")
+        print(f"\n[{i}/{len(targets)}] Transcribing: {wav_path.name}")
         print(f"Duration: {mmss(total_duration)}")
         file_start = time.time()
 
@@ -172,7 +209,7 @@ for i, wav_path in enumerate(wavs, 1):
 total_elapsed = time.time() - batch_start
 
 print("\n=== Batch summary ===")
-print(f"Processed: {len(wavs)}")
+print(f"Processed: {len(targets)}")
 print(f"Success  : {ok}")
 print(f"Skipped  : {skipped}")
 print(f"Failed   : {failed}")

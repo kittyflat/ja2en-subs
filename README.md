@@ -15,29 +15,27 @@ pip install -r requirements.txt
 
 ## Usage
 
-### 1. Convert video to WAV (mono, 16kHz PCM)
-
-`faster-whisper` works best on mono 16kHz PCM WAV. Convert your source videos first:
-
-```
-for f in *.wmv; do
-  ffmpeg -i "$f" -vn -ac 1 -ar 16000 -c:a pcm_s16le "${f%.wmv}.wav"
-done
-```
-
-### 2. Transcribe
+### 1. Transcribe
 
 ```
 python transcribe.py <dir_or_file> [model] [--force]
 ```
 
-- `<dir_or_file>` — a `.wav` file, or a directory (searched recursively)
+- `<dir_or_file>` — a media file or a directory (searched recursively). Accepts
+  `.wav` directly, or video files (`.mp4`, `.mkv`, `.wmv`, `.mov`, `.avi`, `.m4v`)
 - `[model]` — whisper model size: `tiny`, `base`, `small`, `medium` (default), `large-v3`
 - `--force` — re-transcribe even if a `.srt` already exists
 
-Writes a `.srt` next to each `.wav`. Already-transcribed files (with an existing `.srt`) are skipped, so it's safe to re-run on a directory as new files are added.
+Video files are automatically converted to mono 16kHz PCM WAV via `ffmpeg` (required
+on your `PATH`). The resulting `.wav` is written next to the source and reused on
+later runs — conversion is skipped if a `.wav` already exists, so it's cheap to
+re-run the script as new files show up.
 
-### 3. Translate
+Writes a `.srt` next to each file. Already-transcribed files (with an existing
+`.srt`) are skipped unless `--force` is given, so it's safe to re-run on a
+directory as new files are added.
+
+### 2. Translate
 
 ```
 python translate.py <dir_or_file> [--force]
@@ -50,6 +48,7 @@ Writes a `.en.srt` next to each `.srt`. Already-translated files are skipped, so
 
 ## Notes
 
+- Requires `ffmpeg` on your `PATH` for video-to-WAV conversion.
 - Both scripts load their model once and reuse it across a whole batch.
 - Both print live progress (segments/lines processed, elapsed time, ETA) and a summary at the end (success/skipped/failed counts).
 - Source language is hardcoded to Japanese (`language="ja"` for transcription, `Helsinki-NLP/opus-mt-ja-en` for translation).
