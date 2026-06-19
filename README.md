@@ -23,7 +23,7 @@ python transcribe.py <dir_or_file> [model] [--force]
 
 - `<dir_or_file>` — a media file or a directory (searched recursively). Accepts
   `.wav` directly, or video files (`.mp4`, `.mkv`, `.wmv`, `.mov`, `.avi`, `.m4v`)
-- `[model]` — whisper model size: `tiny`, `base`, `small`, `medium` (default), `large-v3`
+- `[model]` — whisper model size: `tiny`, `base`, `small`, `medium`, `large-v3` (default)
 - `--force` — re-transcribe even if a `.srt` already exists
 
 Video files are automatically converted to mono 16kHz PCM WAV via `ffmpeg` (required
@@ -35,16 +35,25 @@ Writes a `.srt` next to each file. Already-transcribed files (with an existing
 `.srt`) are skipped unless `--force` is given, so it's safe to re-run on a
 directory as new files are added.
 
+VAD filtering is enabled by default (`vad_filter=True`), which skips non-speech
+segments and prevents hallucination loops over music or ambient noise.
+
 ### 2. Translate
 
 ```
-python translate.py <dir_or_file> [--force]
+python translate.py <dir_or_file> [model] [--force]
 ```
 
 - `<dir_or_file>` — a `.srt` file, or a directory (searched recursively)
+- `[model]` — translation model: `nllb` (default) or `marian`
 - `--force` — re-translate even if a `.en.srt` already exists
 
 Writes a `.en.srt` next to each `.srt`. Already-translated files are skipped, so it's safe to re-run on a directory as new subtitle files appear.
+
+The default model is [NLLB-200](https://huggingface.co/facebook/nllb-200-distilled-600M)
+(`facebook/nllb-200-distilled-600M`), which produces noticeably better translations
+than MarianMT on longer sentences. Pass `marian` to use
+[MarianMT](https://huggingface.co/Helsinki-NLP/opus-mt-ja-en) instead.
 
 ## Notes
 

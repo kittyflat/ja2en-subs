@@ -91,14 +91,22 @@ if len(sys.argv) < 2:
     sys.exit(1)
 
 input_path = pathlib.Path(sys.argv[1]).expanduser().resolve()
-model_size = "medium"
+model_size = "large-v3"
 force = False
 
-for arg in sys.argv[2:]:
+output_path_override = None
+
+i = 2
+while i < len(sys.argv):
+    arg = sys.argv[i]
     if arg == "--force":
         force = True
+    elif arg == "--output":
+        i += 1
+        output_path_override = pathlib.Path(sys.argv[i]).expanduser().resolve()
     else:
         model_size = arg  # allow model as second positional
+    i += 1
 
 # ----------------------------
 # Setup model once
@@ -142,7 +150,7 @@ skipped = 0
 failed = 0
 
 for i, (source_path, wav_path) in enumerate(targets, 1):
-    output_path = wav_path.with_suffix(".srt")
+    output_path = output_path_override if output_path_override else wav_path.with_suffix(".srt")
 
     if output_path.exists() and not force:
         print(f"[{i}/{len(targets)}] SKIP (exists): {wav_path.name}")
@@ -164,6 +172,7 @@ for i, (source_path, wav_path) in enumerate(targets, 1):
             str(wav_path),
             language="ja",
             beam_size=5,
+            vad_filter=True,
         )
 
         count = 0

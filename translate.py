@@ -1,11 +1,12 @@
 """
-Batch-translate Japanese .srt subtitle files to English using MarianMT.
+Batch-translate Japanese .srt subtitle files to English using NLLB-200.
 
 Usage:
-  python translate.py <dir_or_file> [--force]
+  python translate.py <dir_or_file> [model] [--force]
 
 Arguments:
   <dir_or_file>   Path to a .srt file or a directory (searched recursively)
+  [model]         Translation model: nllb (default) or marian
   --force         Re-generate .en.srt files even if they already exist
 
 Notes:
@@ -16,14 +17,20 @@ Notes:
     per-file progress, elapsed time, and ETA
 """
 
-from transformers import MarianMTModel, MarianTokenizer
+from transformers import (
+    AutoModelForSeq2SeqLM,
+    AutoTokenizer,
+    MarianMTModel,
+    MarianTokenizer,
+)
 import sys
 import pathlib
 import time
 import torch
 from typing import Iterable
 
-MODEL_NAME = "Helsinki-NLP/opus-mt-ja-en"
+NLLB_MODEL = "facebook/nllb-200-distilled-600M"
+MARIAN_MODEL = "Helsinki-NLP/opus-mt-ja-en"
 BATCH_SIZE = 8
 
 # ----------------------------
@@ -52,13 +59,24 @@ def iter_srts(input_path: pathlib.Path) -> Iterable[pathlib.Path]:
         p for p in input_path.rglob("*.srt") if not p.name.endswith(".en.srt")
     )
 
-def translate_batch(tokenizer, model, lines):
+def translate_batch_nllb(tokenizer, model, lines):
+    inputs = tokenizer(lines, return_tensors="pt", padding=True, truncation=True)
+    with torch.no_grad():
+        outputs = model.generate(
+            **inputs,
+            forced_bos_token_id=tokenizer.convert_tokens_to_ids("eng_Latn"),
+            max_new_tokens=30,
+            num_beams=5,
+        )
+    return tokenizer.batch_decode(outputs, skip_special_tokens=True)
+
+def translate_batch_marian(tokenizer, model, lines):
     inputs = tokenizer(lines, return_tensors="pt", padding=True, truncation=True)
     with torch.no_grad():
         outputs = model.generate(**inputs, max_length=512, num_beams=5)
     return tokenizer.batch_decode(outputs, skip_special_tokens=True)
 
-def translate_srt(tokenizer, model, input_path: pathlib.Path, output_path: pathlib.Path) -> int:
+def translate_srt(tokenizer, model, translate_batch_fn, input_path: pathlib.Path, output_path: pathlib.Path) -> int:
     """Translate one .srt file to output_path. Returns the number of subtitle lines translated."""
     lines = input_path.read_text(encoding="utf-8").splitlines(keepends=True)
 
@@ -76,7 +94,7 @@ def translate_srt(tokenizer, model, input_path: pathlib.Path, output_path: pathl
 
     def flush_buffer():
         nonlocal translated_count
-        translated = translate_batch(tokenizer, model, text_buffer)
+        translated = translate_batch_fn(tokenizer, model, text_buffer)
         for t in translated:
             translated_lines.append(t + "\n")
             translated_count += 1
@@ -119,21 +137,39 @@ def translate_srt(tokenizer, model, input_path: pathlib.Path, output_path: pathl
 # ----------------------------
 
 if len(sys.argv) < 2:
-    print("Usage: python translate.py <dir_or_file> [--force]")
+    print("Usage: python translate.py <dir_or_file> [model] [--force]")
     sys.exit(1)
 
 input_path = pathlib.Path(sys.argv[1]).expanduser().resolve()
-force = "--force" in sys.argv[2:]
+force = False
+model_choice = "nllb"
+
+for arg in sys.argv[2:]:
+    if arg == "--force":
+        force = True
+    elif arg in ("nllb", "marian"):
+        model_choice = arg
+    else:
+        print(f"Unknown argument: {arg}")
+        sys.exit(1)
 
 # ----------------------------
 # Setup model once
 # ----------------------------
 
 print(f"Input: {input_path}")
-print("Loading MarianMT model (JA → EN)...")
 
-tokenizer = MarianTokenizer.from_pretrained(MODEL_NAME)
-model = MarianMTModel.from_pretrained(MODEL_NAME)
+if model_choice == "nllb":
+    print(f"Loading NLLB-200 ({NLLB_MODEL})...")
+    tokenizer = AutoTokenizer.from_pretrained(NLLB_MODEL, src_lang="jpn_Jpan")
+    model = AutoModelForSeq2SeqLM.from_pretrained(NLLB_MODEL)
+    translate_batch_fn = translate_batch_nllb
+else:
+    print(f"Loading MarianMT ({MARIAN_MODEL})...")
+    tokenizer = MarianTokenizer.from_pretrained(MARIAN_MODEL)
+    model = MarianMTModel.from_pretrained(MARIAN_MODEL)
+    translate_batch_fn = translate_batch_marian
+
 model.eval()
 model.to("cpu")
 
@@ -165,7 +201,7 @@ for i, srt_path in enumerate(srts, 1):
         print(f"\n[{i}/{len(srts)}] Translating: {srt_path.name}")
         file_start = time.time()
 
-        count = translate_srt(tokenizer, model, srt_path, output_path)
+        count = translate_srt(tokenizer, model, translate_batch_fn, srt_path, output_path)
 
         file_elapsed = time.time() - file_start
         ok += 1
